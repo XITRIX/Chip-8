@@ -14,8 +14,8 @@ class Core {
     var rom: [UInt8]
 
     init() {
-//        let romUrl = Bundle.main.url(forResource: "IBMLogo", withExtension: "ch8")!
-        let romUrl = Bundle.main.url(forResource: "br8kout", withExtension: "ch8")!
+        let romUrl = Bundle.main.url(forResource: "IBMLogo", withExtension: "ch8")!
+//        let romUrl = Bundle.main.url(forResource: "br8kout", withExtension: "ch8")!
         rom = [UInt8](try! Data(contentsOf: romUrl))
 
         loadFont()
@@ -28,6 +28,9 @@ class Core {
         }
 
         displayRunLoop = .init(fps: 60, name: "display") { [self] in
+            if delayTimer > 0 { delayTimer -= 1 }
+            if soundTimer > 0 { soundTimer -= 1 }
+
             if displayCall {
                 imageData = framebuffer
                 displayCall = false
@@ -45,6 +48,9 @@ class Core {
     private var stack: [UInt16] = []
     private var reg: [UInt8: UInt8] = [:]
     private var memory: [UInt8] = .init(repeating: 0, count: 4096)
+
+    private var delayTimer: UInt8 = 0
+    private var soundTimer: UInt8 = 0
 
     private var cpuRunLoop: RunLoop!
     private var displayRunLoop: RunLoop!
@@ -120,7 +126,7 @@ private extension Core {
         case 0xe000:
             skip(instruction)
         case 0xf000:
-            stub(instruction)
+            fInstructions(instruction)
         default:
             stub(instruction)
         }
@@ -139,6 +145,24 @@ private extension Core {
 }
 
 private extension Core {
+    func fInstructions(_ instruction: UInt16) {
+        let vx = UInt8((instruction & 0x0f00) >> 8)
+
+        switch instruction & 0xf0ff {
+        case 0xf007:
+            reg[vx] = delayTimer
+            print("Get delay timer \(delayTimer)")
+        case 0xf015:
+            delayTimer = reg[vx]!
+            print("Set delay timer \(delayTimer)")
+        case 0xf018:
+            soundTimer = reg[vx]!
+            print("Set sound timer \(soundTimer)")
+        default:
+            stub(instruction)
+        }
+    }
+
     func skip(_ instruction: UInt16) {
         var positive = false
 
@@ -244,6 +268,7 @@ private extension Core {
                 break
             }
         }
+        print("Image drawn")
     }
 
     func loadFont() {
