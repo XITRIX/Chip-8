@@ -17,16 +17,24 @@ struct ImageData {
     var width: Int
     var height: Int
 
-    init() {
-        data = []
-        width = 0
-        height = 0
+    init(width: Int = 64, height: Int = 32) {
+        data = .init(repeating: false, count: width * height)
+        self.width = width
+        self.height = height
     }
 
     init(data: [Bool], width: Int, height: Int) {
         self.data = data
         self.width = width
         self.height = height
+    }
+
+    func get(_ x: UInt8, _ y: UInt8) -> Bool {
+        data[width * Int(y) + Int(x)]
+    }
+
+    mutating func set(_ x: UInt8, _ y: UInt8, _ value: Bool) {
+        data[width * Int(y) + Int(x)] = value
     }
 
     mutating func clear() {
