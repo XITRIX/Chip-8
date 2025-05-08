@@ -9,9 +9,10 @@ import CoreGraphics
 import SwiftUICore
 
 struct ImageData {
-    static var whiteColor: [UInt8] { [100, 210, 224, 255] }
-    static var blackColor: [UInt8] { [0, 0, 0, 255] }
+//    static var whiteColor: [UInt8] { [100, 210, 224, 255] }
+//    static var blackColor: [UInt8] { [0, 0, 0, 255] }
     static var randomColor: [UInt8] { [UInt8.random(in: UInt8.min ... UInt8.max), UInt8.random(in: UInt8.min ... UInt8.max), UInt8.random(in: UInt8.min ... UInt8.max), 255] }
+    private let queue = DispatchQueue(label: "Atomic-\(UUID())")
 
     var data: [Bool]
     var width: Int
@@ -57,14 +58,18 @@ struct ImageData {
 }
 
 struct PixelImageView: View {
+    @Environment(\.self) private var environment
+
     @Binding var pixels: ImageData
+    @Binding var blackColor: Color
+    @Binding var whiteColor: Color
 
     var body: some View {
         if let image = makeCGImage(from: pixels) {
             Image(decorative: image, scale: 1.0, orientation: .up)
                 .resizable()
                 .interpolation(.none) // Disable smoothing
-                .drawingGroup()       // Force rasterization to apply interpolation setting
+                .drawingGroup() // Force rasterization to apply interpolation setting
                 .aspectRatio(contentMode: .fit)
         } else {
             Image(systemName: "trash")
@@ -78,7 +83,14 @@ private extension PixelImageView {
         let bytesPerRow = pixelData.width * bytesPerPixel
         let bitsPerComponent = 8
 
-        let data = pixelData.data.map { $0 ? ImageData.whiteColor : ImageData.blackColor }.flatMap { $0 }
+        let whiteColor = whiteColor.resolve(in: environment)
+        let blackColor = blackColor.resolve(in: environment)
+
+        var data = [UInt8]()
+        data.reserveCapacity(pixelData.width * pixelData.height * 4)
+        for pixel in pixelData.data {
+            data.append(contentsOf: pixel ? whiteColor.data : blackColor.data)
+        }
 
         guard data.count == pixelData.width * pixelData.height * bytesPerPixel else {
             return nil
@@ -99,5 +111,15 @@ private extension PixelImageView {
 
             return context.makeImage()
         }
+    }
+}
+
+private extension Color.Resolved {
+    var data: [UInt8] {
+        [clamp(red), clamp(green), clamp(blue), 255]
+    }
+
+    private func clamp(_ x: Float) -> UInt8 {
+        UInt8(max(0, min(255, Int((x * 255).rounded()))))
     }
 }

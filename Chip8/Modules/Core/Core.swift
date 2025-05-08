@@ -35,7 +35,7 @@ class Core {
         loadRom()
 
         // 700
-        cpuRunLoop = .init(fps: 40000, name: "cpu") { [weak self] in
+        cpuRunLoop = .init(fps: 30000, name: "cpu") { [weak self] in
             guard let self else { return }
 
             keyboardKeysCopy = keyboardKeys
@@ -190,30 +190,33 @@ private extension Core {
         let vx = UInt8((instruction & 0x0f00) >> 8)
         let vy = UInt8((instruction & 0x00f0) >> 4)
 
+        let x = reg[vx] ?? 0
+        let y = reg[vy] ?? 0
+
         switch instruction & 0x000f {
         case 0x0000:
             reg[vx] = reg[vy]
             verbosePrint("Set Reg V\(vx) to \(reg[vy]!)")
         case 0x0001:
-            reg[vx]! |= reg[vy]!
+            reg[vx]! |= y
             reg[0xf] = 0
         case 0x0002:
-            reg[vx]! &= reg[vy]!
+            reg[vx]! &= y
             reg[0xf] = 0
         case 0x0003:
-            reg[vx]! ^= reg[vy]!
+            reg[vx]! ^= y
             reg[0xf] = 0
         case 0x0004:
-            let flag: UInt8 = (Int(reg[vx]!) + Int(reg[vy]!)) > UInt8.max ? 1 : 0
-            reg[vx]! &+= reg[vy]!
+            let flag: UInt8 = (Int(x) + Int(y)) > UInt8.max ? 1 : 0
+            reg[vx] = x &+ y
             reg[0xf] = flag
         case 0x0005:
-            let flag: UInt8 = reg[vx]! >= reg[vy]! ? 1 : 0
-            reg[vx]! &-= reg[vy]!
+            let flag: UInt8 = x >= y ? 1 : 0
+            reg[vx]! &-= y
             reg[0xf] = flag
         case 0x0007:
-            let flag: UInt8 = reg[vy]! >= reg[vx]! ? 1 : 0
-            reg[vx] = reg[vy]! &- reg[vx]!
+            let flag: UInt8 = y >= x ? 1 : 0
+            reg[vx] = y &- x
             reg[0xf] = flag
         case 0x0006, 0x000e:
             if !shiftNewBehaviour {
@@ -221,11 +224,11 @@ private extension Core {
             }
 
             if instruction & 0x000f == 0x6 {
-                let flag: UInt8 = reg[vx]! & 1
+                let flag: UInt8 = x & 1
                 reg[vx]! >>= 1
                 reg[0xf] = flag
             } else {
-                let flag: UInt8 = (reg[vx]! >> 7) & 1
+                let flag: UInt8 = (x >> 7) & 1
                 reg[vx]! <<= 1
                 reg[0xf] = flag
             }
@@ -381,12 +384,8 @@ private extension Core {
         let vy = UInt8((instruction & 0x00f0) >> 4)
         let n = UInt8(instruction & 0x000f)
 
-        guard let rvx = reg[vx],
-              let rvy = reg[vy]
-        else {
-            error("Register out of bounds")
-            return
-        }
+        let rvx = reg[vx] ?? 0
+        let rvy = reg[vy] ?? 0
 
         let x = rvx & UInt8(framebuffer.width - 1)
         var y = rvy & UInt8(framebuffer.height - 1)
