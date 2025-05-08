@@ -11,33 +11,69 @@ import QuartzCore
 @Observable
 class Core {
     var imageData: ImageData = .init()
+    var keyboardKeys: [UInt8: Bool] = [:]
     var rom: [UInt8]
 
-    init() {
-        let romUrl = Bundle.main.url(forResource: "IBMLogo", withExtension: "ch8")!
-//        let romUrl = Bundle.main.url(forResource: "br8kout", withExtension: "ch8")!
-        rom = [UInt8](try! Data(contentsOf: romUrl))
+    var isVerbose = false
+    var memoryNewBehaviour: Bool = true
+    var shiftNewBehaviour: Bool = false
+    var jumpingNewBehaviour: Bool = true
+
+    init(rom: Data) {
+        self.rom = [UInt8](rom)
+    }
+
+    func start() {
+        pc = 0x200
+        index = 0
+        stack = []
+        reg = [:]
+        memory = .init(repeating: 0, count: 4096)
+        framebuffer = .init()
 
         loadFont()
         loadRom()
 
-        cpuRunLoop = .init(fps: 700, name: "cpu") { [self] in
+        // 700
+        cpuRunLoop = .init(fps: 40000, name: "cpu") { [weak self] in
+            guard let self else { return }
+
+            keyboardKeysCopy = keyboardKeys
+
             let instruction = fetch()
             decode(instruction)
             execute()
+
         }
 
-        displayRunLoop = .init(fps: 60, name: "display") { [self] in
+        displayRunLoop = .init(fps: 60, name: "display") { [weak self] in
+            guard let self else { return }
             if delayTimer > 0 { delayTimer -= 1 }
-            if soundTimer > 0 { soundTimer -= 1 }
+            if soundTimer > 0 {
+                BeepController.shared.startBeeping()
+                soundTimer -= 1
+            } else {
+                BeepController.shared.stopBeeping()
+            }
 
-            if displayCall {
+            if imageData.data != framebuffer.data {
                 imageData = framebuffer
-                displayCall = false
             }
         }
     }
 
+    func stop() {
+        cpuRunLoop = nil
+        displayRunLoop = nil
+        BeepController.shared.stopBeeping()
+    }
+
+    deinit {
+        print("Deinit")
+    }
+
+    private var keyToWait: UInt8?
+    private var keyboardKeysCopy: [UInt8: Bool] = [:]
     private var displayCall = false
     private var framebuffer: ImageData = .init() {
         didSet { displayCall = true }
@@ -66,62 +102,58 @@ private extension Core {
     }
 
     func decode(_ instruction: UInt16) {
-        print("Decoding instruction: \(String(format: "%04X", instruction))")
+        verbosePrint("Decoding instruction: \(String(format: "%04X", instruction))")
         switch instruction & 0xf000 {
         case 0x0000:
             switch instruction {
-            case 0x00e0:
+            case 0x00e0: // DONE
                 framebuffer.clear()
-                print("Clear display")
+                verbosePrint("Clear display")
             case 0x00ee:
                 pc = stack.removeLast()
-                print("Pop back PC to \(pc)")
+                verbosePrint("Pop back PC to \(pc)")
             default:
                 stub(instruction)
             }
-        case 0x1000:
+        case 0x1000: // DONE
             pc = instruction & 0x0fff
-            print("Jump PC to \(pc)")
+            verbosePrint("Jump PC to \(pc)")
         case 0x2000:
             stack.append(pc)
             pc = instruction & 0x0fff
-            print("Subroutine PC to \(pc)")
+            verbosePrint("Subroutine PC to \(pc)")
         case 0x3000:
             skip(instruction)
         case 0x4000:
             skip(instruction)
         case 0x5000:
             skip(instruction)
-        case 0x6000:
+        case 0x6000: // DONE
             let address = UInt8((instruction & 0x0f00) >> 8)
             let value = UInt8(instruction & 0x00ff)
             reg[address] = value
-            print("Set V\(address): \(value)")
-        case 0x7000:
+            verbosePrint("Set V\(address): \(value)")
+        case 0x7000: // DONE
             let vx = UInt8((instruction & 0x0f00) >> 8)
             let nn = UInt8(instruction & 0x00ff)
             reg[vx] = (reg[vx] ?? 0) &+ nn
-            print("Add \(nn) to Reg V\(vx)")
+            verbosePrint("Add \(nn) to Reg V\(vx)")
         case 0x8000:
-            let vx = UInt8((instruction & 0x0f00) >> 8)
-            let vy = UInt8((instruction & 0x00f0) >> 4)
-            reg[vx] = reg[vy]
-
-            print("Set Reg V\(vx) to \(reg[vy]!)")
+            math(instruction)
         case 0x9000:
             skip(instruction)
-        case 0xa000:
+        case 0xa000: // DONE
             index = instruction & 0x0fff
-            print("Set index: \(index)")
+            verbosePrint("Set index: \(index)")
         case 0xb000:
-            stub(instruction)
+            jump(instruction)
         case 0xc000:
             let vx = UInt8((instruction & 0x0f00) >> 8)
             let nn = UInt8(instruction & 0x00ff)
-            let rand = UInt8.random(in: 0...UInt8.max) & nn
+            let rand = UInt8.random(in: 0 ... UInt8.max) & nn
             reg[vx] = rand
-            print("Random number \(rand) put into Reg V\(vx)")
-        case 0xd000:
+            verbosePrint("Random number \(rand) put into Reg V\(vx)")
+        case 0xd000: // WORK
             draw(instruction)
         case 0xe000:
             skip(instruction)
@@ -130,7 +162,7 @@ private extension Core {
         default:
             stub(instruction)
         }
-        print("")
+        verbosePrint("")
     }
 
     func execute() {}
@@ -145,22 +177,134 @@ private extension Core {
 }
 
 private extension Core {
+    func jump(_ instruction: UInt16) {
+        if !jumpingNewBehaviour {
+            index = instruction & 0x0fff + UInt16(reg[0x0] ?? 0)
+        } else {
+            let vx = UInt8((instruction & 0x0f00) >> 8)
+            index = instruction & 0x0fff + UInt16(reg[vx] ?? 0)
+        }
+    }
+
+    func math(_ instruction: UInt16) {
+        let vx = UInt8((instruction & 0x0f00) >> 8)
+        let vy = UInt8((instruction & 0x00f0) >> 4)
+
+        switch instruction & 0x000f {
+        case 0x0000:
+            reg[vx] = reg[vy]
+            verbosePrint("Set Reg V\(vx) to \(reg[vy]!)")
+        case 0x0001:
+            reg[vx]! |= reg[vy]!
+            reg[0xf] = 0
+        case 0x0002:
+            reg[vx]! &= reg[vy]!
+            reg[0xf] = 0
+        case 0x0003:
+            reg[vx]! ^= reg[vy]!
+            reg[0xf] = 0
+        case 0x0004:
+            let flag: UInt8 = (Int(reg[vx]!) + Int(reg[vy]!)) > UInt8.max ? 1 : 0
+            reg[vx]! &+= reg[vy]!
+            reg[0xf] = flag
+        case 0x0005:
+            let flag: UInt8 = reg[vx]! >= reg[vy]! ? 1 : 0
+            reg[vx]! &-= reg[vy]!
+            reg[0xf] = flag
+        case 0x0007:
+            let flag: UInt8 = reg[vy]! >= reg[vx]! ? 1 : 0
+            reg[vx] = reg[vy]! &- reg[vx]!
+            reg[0xf] = flag
+        case 0x0006, 0x000e:
+            if !shiftNewBehaviour {
+                reg[vx] = reg[vy]
+            }
+
+            if instruction & 0x000f == 0x6 {
+                let flag: UInt8 = reg[vx]! & 1
+                reg[vx]! >>= 1
+                reg[0xf] = flag
+            } else {
+                let flag: UInt8 = (reg[vx]! >> 7) & 1
+                reg[vx]! <<= 1
+                reg[0xf] = flag
+            }
+        default:
+            stub(instruction)
+        }
+    }
+
     func fInstructions(_ instruction: UInt16) {
         let vx = UInt8((instruction & 0x0f00) >> 8)
 
         switch instruction & 0xf0ff {
         case 0xf007:
             reg[vx] = delayTimer
-            print("Get delay timer \(delayTimer)")
+            verbosePrint("Get delay timer \(delayTimer)")
         case 0xf015:
             delayTimer = reg[vx]!
-            print("Set delay timer \(delayTimer)")
+            verbosePrint("Set delay timer \(delayTimer)")
         case 0xf018:
             soundTimer = reg[vx]!
-            print("Set sound timer \(soundTimer)")
+            verbosePrint("Set sound timer \(soundTimer)")
+        case 0xf01e:
+            index += UInt16(reg[vx] ?? 0)
+            verbosePrint("Index increased on \(vx) = \(index)")
+        case 0xf029:
+            index = 0x050 + UInt16(vx)
+        case 0xf033:
+            let val = reg[vx]!
+            memory[Int(index)] = val / 100
+            memory[Int(index) + 1] = val % 100 / 10
+            memory[Int(index) + 2] = val % 10
+            verbosePrint("")
+        case 0xf055:
+            saveMem(vx)
+        case 0xf065:
+            loadMem(vx)
+        case 0xf00a:
+            if keyToWait != nil, keyboardKeysCopy[keyToWait!] != true {
+                reg[vx] = keyToWait
+                keyToWait = nil
+                break
+            }
+
+            if keyToWait == nil {
+                for key in keyboardKeysCopy {
+                    if key.value {
+                        keyToWait = key.key
+                    }
+                }
+            }
+
+            pc -= 2
         default:
             stub(instruction)
         }
+    }
+
+    func saveMem(_ size: UInt8) {
+        for i in 0 ... size {
+            if !memoryNewBehaviour {
+                memory[Int(index) + Int(i)] = reg[i] ?? 0
+            } else {
+                memory[Int(index)] = reg[i] ?? 0
+                index += 1
+            }
+        }
+        verbosePrint("Memory saved")
+    }
+
+    func loadMem(_ size: UInt8) {
+        for i in 0 ... size {
+            if !memoryNewBehaviour {
+                reg[i] = memory[Int(index) + Int(i)]
+            } else {
+                reg[i] = memory[Int(index)]
+                index += 1
+            }
+        }
+        verbosePrint("Memory loaded")
     }
 
     func skip(_ instruction: UInt16) {
@@ -173,17 +317,18 @@ private extension Core {
         case 0x4000:
             let vx = UInt8((instruction & 0x0f00) >> 8)
             let nn = UInt8(instruction & 0x00ff)
+            let rvx = reg[vx] ?? 0
 
-            guard let rvx = reg[vx] else {
-                error("Register out of bounds")
-                return
-            }
-            
+//            guard let rvx = reg[vx] else {
+//                error("Register out of bounds")
+//                return
+//            }
+
             if positive ? rvx == nn : rvx != nn {
                 pc += 2
-                print("Instruction skiped")
+                verbosePrint("Instruction skiped")
             } else {
-                print("Instruction NOT skiped")
+                verbosePrint("Instruction NOT skiped")
             }
         case 0x5000:
             positive = true
@@ -195,29 +340,33 @@ private extension Core {
             guard let rvx = reg[vx],
                   let rvy = reg[vy]
             else {
-                error("Register out of bounds")
+                verbosePrint("Register out of bounds")
                 return
             }
 
             if positive ? rvx == rvy : rvx != rvy {
                 pc += 2
-                print("Instruction skiped")
+                verbosePrint("Instruction skiped")
             } else {
-                print("Instruction NOT skiped")
+                verbosePrint("Instruction NOT skiped")
             }
         case 0xe000:
-            switch instruction & 0x00FF {
+            switch instruction & 0x00ff {
             case 0x009e:
                 positive = true
                 fallthrough
             case 0x00a1:
                 let vx = UInt8((instruction & 0x0f00) >> 8)
-                error("Keyboard not implemented")
+                let key = reg[vx] ?? 0
 
                 if positive {
-//                    pc += 2
+                    if keyboardKeysCopy[key] == true {
+                        pc += 2
+                    }
                 } else {
-                    pc += 2
+                    if keyboardKeysCopy[key] != true {
+                        pc += 2
+                    }
                 }
             default:
                 stub(instruction)
@@ -264,11 +413,11 @@ private extension Core {
             }
             y += 1
 
-            if y == framebuffer.height - 1 {
+            if y >= framebuffer.height - 1 {
                 break
             }
         }
-        print("Image drawn")
+        verbosePrint("Image drawn")
     }
 
     func loadFont() {
@@ -304,6 +453,12 @@ private extension Core {
             0xf0, 0x80, 0xf0, 0x80, 0xf0, // E
             0xf0, 0x80, 0xf0, 0x80, 0x80 // F
         ]
+    }
+
+    func verbosePrint(_ message: String) {
+        if isVerbose {
+            print(message)
+        }
     }
 }
 
