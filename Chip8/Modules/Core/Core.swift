@@ -254,7 +254,7 @@ private extension Core {
             index += UInt16(reg[vx] ?? 0)
             verbosePrint("Index increased on \(vx) = \(index)")
         case 0xf029:
-            index = 0x050 + UInt16(vx)
+            index = 0x050 + (UInt16(reg[vx] ?? 0) * 5)
         case 0xf033:
             let val = reg[vx]!
             memory[Int(index)] = val / 100
